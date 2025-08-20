@@ -55,7 +55,7 @@ module LogBench
 
         self.timestamp = parse_timestamp(data["timestamp"])
         self.request_id = data["request_id"]
-        self.content = data["message"]
+        self.content = data["message"] || ""
         self.type = determine_json_type(data)
         true
       end

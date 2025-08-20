@@ -235,4 +235,22 @@ class TestLogBench < Minitest::Test
     assert_equal "Simple log message", parsed["message"]
     assert_equal "INFO", parsed["level"]
   end
+
+  def test_parse_entries_with_null_or_missing_message
+    collection = LogBench::Log::Collection.new(TestFixtures.request_with_null_message_logs)
+    requests = collection.requests
+
+    assert_equal 1, requests.size
+    request = requests.first
+
+    assert_equal 2, request.related_logs.size
+
+    request.related_logs.each do |log|
+      assert_equal "", log.content
+      refute_nil log.content
+    end
+
+    assert_equal :other, request.related_logs[0].type
+    assert_equal :other, request.related_logs[1].type
+  end
 end

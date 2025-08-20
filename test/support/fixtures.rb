@@ -58,4 +58,16 @@ module TestFixtures
   def self.lograge_request_with_invalid_json_params
     '{"method":"GET","path":"/test","status":200,"duration":50.0,"controller":"TestController","action":"show","params":"{invalid json","request_id":"abc111","timestamp":"2025-01-01T10:04:00Z"}'
   end
+
+  def self.log_entry_with_null_message
+    '{"message":null,"request_id":"abc123","timestamp":"2025-01-01T10:05:00Z"}'
+  end
+
+  def self.log_entry_with_missing_message
+    '{"request_id":"abc123","timestamp":"2025-01-01T10:06:00Z"}'
+  end
+
+  def self.request_with_null_message_logs
+    [lograge_get_request, log_entry_with_null_message, log_entry_with_missing_message]
+  end
 end
