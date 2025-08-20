@@ -143,7 +143,6 @@ log "Updating version file to ${BOLD}${NEW_VER}${RESET}…"
 before_contents="$(cat "$VERSION_FILE")"
 update_version_file "$NEW_VER"
 after_contents="$(cat "$VERSION_FILE")"
-
 if [ "$before_contents" = "$after_contents" ]; then
   AFTER_VER="$(current_version || true)"
   if [ "$AFTER_VER" = "$NEW_VER" ]; then
@@ -161,14 +160,21 @@ log "Installing gems (bundle install)…"
 bundle install
 success "Dependencies installed."
 
-log "Committing version bump…"
-# Only commit if VERSION_FILE actually changed
-if git diff --quiet -- "$VERSION_FILE"; then
-  warn "No changes to commit (version file already at ${NEW_VER})."
-else
-  git add "$VERSION_FILE"
+log "Committing version bump (including Gemfile.lock if changed)…"
+FILES_TO_COMMIT=()
+if ! git diff --quiet -- "$VERSION_FILE"; then
+  FILES_TO_COMMIT+=("$VERSION_FILE")
+fi
+if [ -f "Gemfile.lock" ] && ! git diff --quiet -- "Gemfile.lock"; then
+  FILES_TO_COMMIT+=("Gemfile.lock")
+fi
+
+if [ "${#FILES_TO_COMMIT[@]}" -gt 0 ]; then
+  git add "${FILES_TO_COMMIT[@]}"
   git commit -m "Bump version to ${NEW_VER}"
-  success "Committed."
+  success "Committed: ${FILES_TO_COMMIT[*]}"
+else
+  warn "No changes to commit (version file and Gemfile.lock unchanged)."
 fi
 
 log "Creating tag ${BOLD}${TAG}${RESET}…"
