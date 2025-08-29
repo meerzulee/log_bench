@@ -439,16 +439,16 @@ module LogBench
               # Check if current log is a SQL/cache query followed by a call source line
               if [:sql, :cache].include?(current_log.type) && next_log && next_log.type == :sql_call_line
                 # Group the query and call source together with the same entry_id
-                render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0)
-                render_padded_text_with_spacing(next_log.content, lines, entry_id, extra_empty_lines: 1, use_separator: true)
+                render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0, original_entry: current_log)
+                render_padded_text_with_spacing(next_log.content, lines, entry_id, extra_empty_lines: 1, use_separator: true, original_entry: current_log)
                 i += 2  # Skip the next log since we processed it
               else
                 # Handle standalone logs
                 case current_log.type
                 when :sql, :cache
-                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0)
+                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0, original_entry: current_log)
                 else
-                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 1)
+                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 1, original_entry: current_log)
                 end
                 i += 1
               end
@@ -485,7 +485,7 @@ module LogBench
           matched_indices.sort.map { |index| related_logs[index] }
         end
 
-        def render_padded_text_with_spacing(text, lines, entry_id, extra_empty_lines: 1, use_separator: false)
+        def render_padded_text_with_spacing(text, lines, entry_id, extra_empty_lines: 1, use_separator: false, original_entry: nil)
           # Helper function that renders text with padding, breaking long text into multiple lines
           content_width = detail_win.maxx - 8  # Account for padding (4 spaces each side)
 
@@ -501,12 +501,17 @@ module LogBench
           end
 
           # Render each chunk as a separate line with padding
-          text_chunks.each do |chunk|
-            lines << if has_ansi
+          text_chunks.each_with_index do |chunk, index|
+            line_data = if has_ansi
               {text: "  #{chunk}  ", color: nil, raw_ansi: true, entry_id: entry_id}
             else
               {text: "  #{chunk}  ", color: nil, entry_id: entry_id}
             end
+
+            # Add original_entry reference to the first line of each entry
+            line_data[:original_entry] = original_entry if index == 0 && original_entry
+
+            lines << line_data
           end
 
           # Add extra empty lines after all chunks

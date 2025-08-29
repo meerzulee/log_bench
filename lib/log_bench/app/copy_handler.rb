@@ -16,6 +16,26 @@ module LogBench
         end
       end
 
+      def find_companion_call_line(request, selected_entry_id)
+        # Get the detail lines for the current request
+        lines = renderer&.get_cached_detail_lines(request)
+        return nil unless lines
+
+        # Find all lines belonging to the selected entry
+        selected_lines = lines.select { |line| line[:entry_id] == selected_entry_id }
+
+        # Look for a call line (starts with "↳") in the same entry group
+        call_line = selected_lines.find do |line|
+          text = line[:text]&.gsub(/\e\[[0-9;]*m/, "")&.strip
+          text&.start_with?("↳")
+        end
+
+        if call_line
+          # Clean and return the call line content
+          call_line[:text].gsub(/\e\[[0-9;]*m/, "").strip
+        end
+      end
+
       private
 
       attr_accessor :state, :renderer
@@ -51,7 +71,7 @@ module LogBench
         request = state.current_request
         return unless request
 
-        # Get the detail lines for the current request
+        # Get the detail lines for the current request to find entry IDs
         lines = renderer&.get_cached_detail_lines(request)
         return unless lines
 
@@ -63,24 +83,63 @@ module LogBench
         selected_entry_id = entry_ids[state.detail_selected_entry]
         return unless selected_entry_id
 
-        # Find all lines belonging to the selected entry
+        # Find lines belonging to the selected entry and look for original_entry reference
         selected_lines = lines.select { |line| line[:entry_id] == selected_entry_id }
 
-        # Extract the text content, removing ANSI codes and padding
-        content = selected_lines.map do |line|
-          text = line[:text] || ""
-          # Remove ANSI escape codes and trim padding
-          text.gsub(/\e\[[0-9;]*m/, "").strip
-        end.reject(&:empty?)
+        # Look for a line that has the original_entry reference
+        original_entry = nil
+        selected_lines.each do |line|
+          if line[:original_entry]
+            original_entry = line[:original_entry]
+            break
+          end
+        end
 
-        # Check if this is a SQL query by looking for SQL keywords in the content
-        content_text = content.join(" ")
-        is_sql_query = sql_query?(content_text)
+        if original_entry
+          # Use the original log entry content
+          content = original_entry.content
+          return unless content
 
-        if is_sql_query
-          Clipboard.copy("```sql\n#{content.join("\n")}\n```")
+          # Remove ANSI escape codes for clean copying
+          clean_content = content.gsub(/\e\[[0-9;]*m/, "").strip
+
+          # Check if this is a SQL query and if there's a companion call line
+          is_sql_query = sql_query?(clean_content)
+
+          if is_sql_query
+            # Look for companion call line in the same entry group
+            call_line_content = find_companion_call_line(request, selected_entry_id)
+
+            if call_line_content
+              # Include both SQL query and call line
+              full_content = "#{clean_content}\n#{call_line_content}"
+              Clipboard.copy("```sql\n#{full_content}\n```")
+            else
+              # Just the SQL query
+              Clipboard.copy("```sql\n#{clean_content}\n```")
+            end
+          else
+            Clipboard.copy(clean_content)
+          end
         else
-          Clipboard.copy(content.join("\n"))
+          # Fallback to the old method - join wrapped lines but try to reconstruct original
+          content = selected_lines.map do |line|
+            text = line[:text] || ""
+            # Remove ANSI escape codes and trim padding
+            text.gsub(/\e\[[0-9;]*m/, "").strip
+          end.reject(&:empty?)
+
+          # Try to join the content intelligently
+          content_text = content.join(" ").gsub(/\s+/, " ").strip
+
+          # Check if this is a SQL query
+          is_sql_query = sql_query?(content_text)
+
+          if is_sql_query
+            Clipboard.copy("```sql\n#{content_text}\n```")
+          else
+            Clipboard.copy(content_text)
+          end
         end
       end
 
