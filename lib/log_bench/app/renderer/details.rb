@@ -8,6 +8,7 @@ module LogBench
       class Details
         include Curses
         EMPTY_LINE = {text: "", color: nil}
+        SEPARATOR_LINE = {text: "", color: nil, separator: true}
 
         def initialize(screen, state, scrollbar, ansi_renderer)
           self.screen = screen
@@ -24,6 +25,20 @@ module LogBench
 
           draw_header
           draw_request_details
+        end
+
+        def get_cached_detail_lines(request)
+          current_cache_key = build_cache_key(request)
+
+          # Return cached lines if cache is still valid
+          if cached_lines && cache_key == current_cache_key
+            return cached_lines
+          end
+
+          # Cache is invalid, rebuild lines
+          self.cached_lines = build_detail_lines(request)
+          self.cache_key = current_cache_key
+          cached_lines
         end
 
         private
@@ -60,16 +75,34 @@ module LogBench
           visible_height = detail_win.maxy - 2
 
           adjust_detail_scroll(lines.size, visible_height)
+          state.adjust_detail_scroll_for_entry_selection(visible_height, lines)
+
+          # Find all unique entry IDs and determine selected entry, excluding separator lines
+          entry_ids = lines.reject { |line| line[:separator] }.map { |line| line[:entry_id] }.compact.uniq
+          selected_entry_id = entry_ids[state.detail_selected_entry] if state.detail_selected_entry < entry_ids.size
 
           visible_lines = lines[state.detail_scroll_offset, visible_height] || []
           visible_lines.each_with_index do |line_data, i|
             y = i + 1  # Start at row 1 (after border)
+            # Don't highlight separator lines
+            is_selected = !line_data[:separator] && line_data[:entry_id] == selected_entry_id && state.right_pane_focused?
+
+            # Draw highlight background if selected
+            if is_selected
+              detail_win.setpos(y, 1)
+              detail_win.attron(color_pair(10) | A_DIM) do
+                detail_win.addstr(" " * (detail_win.maxx - 2))
+              end
+            end
+
             detail_win.setpos(y, 2)
 
             # Handle multi-segment lines (for mixed colors)
             if line_data.is_a?(Hash) && line_data[:segments]
               line_data[:segments].each do |segment|
-                if segment[:color]
+                if is_selected
+                  detail_win.attron(color_pair(10) | A_DIM) { detail_win.addstr(segment[:text]) }
+                elsif segment[:color]
                   detail_win.attron(segment[:color]) { detail_win.addstr(segment[:text]) }
                 else
                   detail_win.addstr(segment[:text])
@@ -77,16 +110,26 @@ module LogBench
               end
             elsif line_data.is_a?(Hash) && line_data[:raw_ansi]
               # Handle lines with raw ANSI codes (like colorized SQL)
-              ansi_renderer.parse_and_render(line_data[:text], detail_win)
+              if is_selected
+                # For selected ANSI lines, render without ANSI codes to maintain highlight
+                plain_text = line_data[:text].gsub(/\e\[[0-9;]*m/, "")
+                detail_win.attron(color_pair(10) | A_DIM) { detail_win.addstr(plain_text) }
+              else
+                ansi_renderer.parse_and_render(line_data[:text], detail_win)
+              end
             elsif line_data.is_a?(Hash)
               # Handle single-color lines
-              if line_data[:color]
+              if is_selected
+                detail_win.attron(color_pair(10) | A_DIM) { detail_win.addstr(line_data[:text]) }
+              elsif line_data[:color]
                 detail_win.attron(line_data[:color]) { detail_win.addstr(line_data[:text]) }
               else
                 detail_win.addstr(line_data[:text])
               end
-            else
+            elsif is_selected
               # Simple string
+              detail_win.attron(color_pair(10) | A_DIM) { detail_win.addstr(line_data.to_s) }
+            else
               detail_win.addstr(line_data.to_s)
             end
           end
@@ -95,20 +138,6 @@ module LogBench
           if lines.size > visible_height
             scrollbar.draw(detail_win, visible_height, state.detail_scroll_offset, lines.size)
           end
-        end
-
-        def get_cached_detail_lines(request)
-          current_cache_key = build_cache_key(request)
-
-          # Return cached lines if cache is still valid
-          if cached_lines && cache_key == current_cache_key
-            return cached_lines
-          end
-
-          # Cache is invalid, rebuild lines
-          self.cached_lines = build_detail_lines(request)
-          self.cache_key = current_cache_key
-          cached_lines
         end
 
         def build_cache_key(request)
@@ -123,6 +152,7 @@ module LogBench
 
         def build_detail_lines(request)
           lines = []
+          entry_id = 0  # Track logical log entries
           # Cache window width to avoid repeated method calls
           window_width = detail_win.maxx
           max_width = window_width - 6  # Leave margin for borders and scrollbar
@@ -136,10 +166,12 @@ module LogBench
           else color_pair(2) | A_BOLD
           end
 
-          lines << EMPTY_LINE
+          lines << EMPTY_LINE.merge(entry_id: entry_id)
+          entry_id += 1
           lines << {
             text: "Method: #{request.method}",
             color: nil,
+            entry_id: entry_id,
             segments: [
               {text: "Method: ", color: color_pair(1)},
               {text: request.method, color: method_color}
@@ -147,17 +179,23 @@ module LogBench
           }
 
           # Path - allow multiple lines with proper color separation
-          add_path_lines(lines, request, max_width)
-          add_status_duration_lines(lines, request)
-          add_controller_lines(lines, request)
-          add_request_id_lines(lines, request)
-          add_params_lines(lines, request, max_width)
-          add_related_logs_section(lines, request)
+          entry_id += 1
+          add_path_lines(lines, request, max_width, entry_id)
+          entry_id += 1
+          add_status_duration_lines(lines, request, entry_id)
+          entry_id += 1
+          add_controller_lines(lines, request, entry_id)
+          entry_id += 1
+          add_request_id_lines(lines, request, entry_id)
+          entry_id += 1
+          add_params_lines(lines, request, max_width, entry_id)
+          entry_id += 1
+          add_related_logs_section(lines, request, entry_id)
 
           lines
         end
 
-        def add_path_lines(lines, request, max_width)
+        def add_path_lines(lines, request, max_width, entry_id)
           path_prefix = "Path: "
           remaining_path = request.path
 
@@ -167,6 +205,7 @@ module LogBench
             lines << {
               text: path_prefix + remaining_path,
               color: nil,
+              entry_id: entry_id,
               segments: [
                 {text: path_prefix, color: color_pair(1)},
                 {text: remaining_path, color: nil}  # Default white color
@@ -178,6 +217,7 @@ module LogBench
             lines << {
               text: path_prefix + first_chunk,
               color: nil,
+              entry_id: entry_id,
               segments: [
                 {text: path_prefix, color: color_pair(1)},
                 {text: first_chunk, color: nil}  # Default white color
@@ -188,13 +228,13 @@ module LogBench
             # Continue on subsequent lines
             while remaining_path.length > 0
               line_chunk = remaining_path[0, max_width]
-              lines << {text: line_chunk, color: nil}  # Default white color
+              lines << {text: line_chunk, color: nil, entry_id: entry_id}  # Default white color
               remaining_path = remaining_path[max_width..] || ""
             end
           end
         end
 
-        def add_status_duration_lines(lines, request)
+        def add_status_duration_lines(lines, request, entry_id)
           if request.status
             # Add status color coding
             status_color = case request.status
@@ -219,17 +259,19 @@ module LogBench
             lines << {
               text: status_text,
               color: nil,
+              entry_id: entry_id,
               segments: segments
             }
           end
         end
 
-        def add_controller_lines(lines, request)
+        def add_controller_lines(lines, request, entry_id)
           if request.controller
             controller_value = "#{request.controller}##{request.action}"
             lines << {
               text: "Controller: #{controller_value}",
               color: nil,
+              entry_id: entry_id,
               segments: [
                 {text: "Controller: ", color: color_pair(1)},
                 {text: controller_value, color: nil}  # Default white color
@@ -238,13 +280,14 @@ module LogBench
           end
         end
 
-        def add_params_lines(lines, request, max_width)
+        def add_params_lines(lines, request, max_width, entry_id)
           return unless request.params
 
-          lines << EMPTY_LINE
+          lines << EMPTY_LINE.merge(entry_id: entry_id)
           lines << {
             text: "Params:",
             color: nil,
+            entry_id: entry_id,
             segments: [
               {text: "Params:", color: color_pair(1) | A_BOLD}
             ]
@@ -259,7 +302,7 @@ module LogBench
 
           while remaining_text && remaining_text.length > 0
             line_chunk = remaining_text[0, line_width]
-            lines << {text: indent + line_chunk, color: nil}
+            lines << {text: indent + line_chunk, color: nil, entry_id: entry_id}
             remaining_text = remaining_text[line_width..] || ""
           end
         end
@@ -312,11 +355,12 @@ module LogBench
           end
         end
 
-        def add_request_id_lines(lines, request)
+        def add_request_id_lines(lines, request, entry_id)
           if request.request_id
             lines << {
               text: "Request ID: #{request.request_id}",
               color: nil,
+              entry_id: entry_id,
               segments: [
                 {text: "Request ID: ", color: color_pair(1)},
                 {text: request.request_id, color: nil}  # Default white color
@@ -333,7 +377,7 @@ module LogBench
           screen.detail_win
         end
 
-        def add_related_logs_section(lines, request)
+        def add_related_logs_section(lines, request, entry_id)
           # Related Logs (grouped by request_id) - only show non-HTTP request logs
           if request.request_id && request.related_logs && !request.related_logs.empty?
             related_logs = request.related_logs
@@ -341,45 +385,30 @@ module LogBench
             # Apply detail filter to related logs
             filtered_related_logs = filter_related_logs(related_logs)
 
-            # Use memoized query statistics from request object
-            query_stats = build_query_stats_from_request(request)
+            # Use QuerySummary for consistent formatting
+            query_summary = QuerySummary.new(request)
+            query_stats = query_summary.build_stats
 
             # Add query summary
-            lines << EMPTY_LINE
+            lines << EMPTY_LINE.merge(entry_id: entry_id)
 
             # Show filter status in summary if filtering is active
             summary_title = "Query Summary:"
-            lines << {text: summary_title, color: color_pair(1) | A_BOLD}
+            lines << {text: summary_title, color: color_pair(1) | A_BOLD, entry_id: entry_id}
 
             if query_stats[:total_queries] > 0
-              # Build summary line with string interpolation
-              summary_parts = ["#{query_stats[:total_queries]} queries"]
+              # Use QuerySummary methods for consistent formatting
+              summary_line = query_summary.build_summary_line(query_stats)
+              lines << {text: "  #{summary_line}", color: color_pair(2), entry_id: entry_id}
 
-              if query_stats[:total_time] > 0
-                time_part = "#{query_stats[:total_time].round(1)}ms total"
-                time_part += ", #{query_stats[:cached_queries]} cached" if query_stats[:cached_queries] > 0
-                summary_parts << "(#{time_part})"
-              elsif query_stats[:cached_queries] > 0
-                summary_parts << "(#{query_stats[:cached_queries]} cached)"
-              end
-
-              lines << {text: "  #{summary_parts.join(" ")}", color: color_pair(2)}
-
-              # Breakdown by operation type - build array efficiently
-              breakdown_parts = [
-                ("#{query_stats[:select]} SELECT" if query_stats[:select] > 0),
-                ("#{query_stats[:insert]} INSERT" if query_stats[:insert] > 0),
-                ("#{query_stats[:update]} UPDATE" if query_stats[:update] > 0),
-                ("#{query_stats[:delete]} DELETE" if query_stats[:delete] > 0),
-                ("#{query_stats[:transaction]} TRANSACTION" if query_stats[:transaction] > 0)
-              ].compact
-
-              unless breakdown_parts.empty?
-                lines << {text: "  #{breakdown_parts.join(", ")}", color: color_pair(2)}
+              breakdown_line = query_summary.build_breakdown_line(query_stats)
+              unless breakdown_line.empty?
+                lines << {text: "  #{breakdown_line}", color: color_pair(2), entry_id: entry_id}
               end
             end
 
-            lines << EMPTY_LINE
+            entry_id += 1
+            lines << EMPTY_LINE.merge(entry_id: entry_id)
 
             # Show filtered logs section
             if state.detail_filter.present?
@@ -388,6 +417,7 @@ module LogBench
               lines << {
                 text: logs_title_text,
                 color: nil,
+                entry_id: entry_id,
                 segments: [
                   {text: "Related Logs ", color: color_pair(1) | A_BOLD},
                   {text: count_text, color: A_DIM},
@@ -395,58 +425,34 @@ module LogBench
                 ]
               }
             else
-              lines << {text: "Related Logs:", color: color_pair(1) | A_BOLD}
+              lines << {text: "Related Logs:", color: color_pair(1) | A_BOLD, entry_id: entry_id}
             end
 
-            # Use filtered logs for display
-            filtered_related_logs.each do |related|
-              case related.type
-              when :sql, :cache
-                render_padded_text_with_spacing(related.content, lines, extra_empty_lines: 0)
+            # Use filtered logs for display - group SQL queries with their call source lines
+            i = 0
+            while i < filtered_related_logs.size
+              current_log = filtered_related_logs[i]
+              next_log = filtered_related_logs[i + 1] if i + 1 < filtered_related_logs.size
+
+              entry_id += 1
+
+              # Check if current log is a SQL/cache query followed by a call source line
+              if [:sql, :cache].include?(current_log.type) && next_log && next_log.type == :sql_call_line
+                # Group the query and call source together with the same entry_id
+                render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0)
+                render_padded_text_with_spacing(next_log.content, lines, entry_id, extra_empty_lines: 1, use_separator: true)
+                i += 2  # Skip the next log since we processed it
               else
-                render_padded_text_with_spacing(related.content, lines, extra_empty_lines: 1)
+                # Handle standalone logs
+                case current_log.type
+                when :sql, :cache
+                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 0)
+                else
+                  render_padded_text_with_spacing(current_log.content, lines, entry_id, extra_empty_lines: 1)
+                end
+                i += 1
               end
             end
-          end
-        end
-
-        def build_query_stats_from_request(request)
-          # Use memoized methods from request object for better performance
-          stats = {
-            total_queries: request.query_count,
-            total_time: request.total_query_time,
-            cached_queries: request.cached_query_count,
-            select: 0,
-            insert: 0,
-            update: 0,
-            delete: 0,
-            transaction: 0
-          }
-
-          # Categorize by operation type for breakdown
-          request.related_logs.each do |log|
-            next unless [:sql, :cache].include?(log.type)
-
-            categorize_sql_operation(log, stats)
-          end
-
-          stats
-        end
-
-        def categorize_sql_operation(log, stats)
-          # Use unified QueryEntry for both SQL and CACHE entries
-          return unless log.is_a?(LogBench::Log::QueryEntry)
-
-          if log.select?
-            stats[:select] += 1
-          elsif log.insert?
-            stats[:insert] += 1
-          elsif log.update?
-            stats[:update] += 1
-          elsif log.delete?
-            stats[:delete] += 1
-          elsif log.transaction? || log.begin? || log.commit? || log.rollback? || log.savepoint?
-            stats[:transaction] += 1
           end
         end
 
@@ -479,7 +485,7 @@ module LogBench
           matched_indices.sort.map { |index| related_logs[index] }
         end
 
-        def render_padded_text_with_spacing(text, lines, extra_empty_lines: 1)
+        def render_padded_text_with_spacing(text, lines, entry_id, extra_empty_lines: 1, use_separator: false)
           # Helper function that renders text with padding, breaking long text into multiple lines
           content_width = detail_win.maxx - 8  # Account for padding (4 spaces each side)
 
@@ -497,14 +503,18 @@ module LogBench
           # Render each chunk as a separate line with padding
           text_chunks.each do |chunk|
             lines << if has_ansi
-              {text: "  #{chunk}  ", color: nil, raw_ansi: true}
+              {text: "  #{chunk}  ", color: nil, raw_ansi: true, entry_id: entry_id}
             else
-              {text: "  #{chunk}  ", color: nil}
+              {text: "  #{chunk}  ", color: nil, entry_id: entry_id}
             end
           end
 
           # Add extra empty lines after all chunks
-          extra_empty_lines.times { lines << EMPTY_LINE }
+          if use_separator
+            extra_empty_lines.times { lines << SEPARATOR_LINE }
+          else
+            extra_empty_lines.times { lines << EMPTY_LINE.merge(entry_id: entry_id) }
+          end
         end
 
         def adjust_detail_scroll(total_lines, visible_height)
