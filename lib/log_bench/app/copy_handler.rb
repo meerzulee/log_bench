@@ -146,7 +146,8 @@ module LogBench
       def sql_query?(text)
         # Check for common SQL keywords that indicate this is a SQL query
         sql_keywords = %w[SELECT INSERT UPDATE DELETE TRANSACTION BEGIN COMMIT ROLLBACK SAVEPOINT]
-        sql_keywords.any? { |keyword| text.upcase.include?(keyword) }
+        pattern = /\b(#{sql_keywords.join('|')})\b/i
+        text.match?(pattern)
       end
     end
   end

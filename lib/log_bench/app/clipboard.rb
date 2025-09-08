@@ -12,6 +12,9 @@ module LogBench
         if system("which pbcopy > /dev/null 2>&1")
           # macOS
           IO.popen("pbcopy", "w") { |io| io.write(text) }
+        elsif system("which wl-copy > /dev/null 2>&1")
+          # Linux with wl-copy (wayland)
+          IO.popen("wl-copy", "w") { |io| io.write(text) }
         elsif system("which xclip > /dev/null 2>&1")
           # Linux with xclip
           IO.popen("xclip -selection clipboard", "w") { |io| io.write(text) }
