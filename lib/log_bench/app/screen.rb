@@ -82,22 +82,23 @@ module LogBench
 
       def setup_colors
         start_color
+        use_default_colors
         cbreak
         noecho
         curs_set(0)
         stdscr.keypad(true)
         stdscr.timeout = INPUT_TIMEOUT_MS
 
-        # Define color pairs
-        init_pair(HEADER_CYAN, COLOR_CYAN, COLOR_BLACK)      # Header/Cyan
-        init_pair(DEFAULT_WHITE, COLOR_WHITE, COLOR_BLACK)     # Default/White
-        init_pair(SUCCESS_GREEN, COLOR_GREEN, COLOR_BLACK)     # GET/Success/Green
-        init_pair(WARNING_YELLOW, COLOR_YELLOW, COLOR_BLACK)    # POST/Warning/Yellow
-        init_pair(INFO_BLUE, COLOR_BLUE, COLOR_BLACK)      # PUT/Blue
-        init_pair(ERROR_RED, COLOR_RED, COLOR_BLACK)       # DELETE/Error/Red
-        init_pair(BRIGHT_WHITE, COLOR_WHITE, COLOR_BLACK)     # Bold/Bright white
-        init_pair(BLACK, COLOR_BLACK, COLOR_BLACK)     # Black
-        init_pair(MAGENTA, COLOR_MAGENTA, COLOR_BLACK)   # Magenta
+        # Define color pairs with transparent background (-1)
+        init_pair(HEADER_CYAN, COLOR_CYAN, -1)      # Header/Cyan
+        init_pair(DEFAULT_WHITE, COLOR_WHITE, -1)     # Default/White
+        init_pair(SUCCESS_GREEN, COLOR_GREEN, -1)     # GET/Success/Green
+        init_pair(WARNING_YELLOW, COLOR_YELLOW, -1)    # POST/Warning/Yellow
+        init_pair(INFO_BLUE, COLOR_BLUE, -1)      # PUT/Blue
+        init_pair(ERROR_RED, COLOR_RED, -1)       # DELETE/Error/Red
+        init_pair(BRIGHT_WHITE, COLOR_WHITE, -1)     # Bold/Bright white
+        init_pair(BLACK, COLOR_BLACK, -1)     # Black
+        init_pair(MAGENTA, COLOR_MAGENTA, -1)   # Magenta
         init_pair(SELECTION_HIGHLIGHT, COLOR_BLACK, COLOR_CYAN)     # Selection highlighting
       end
 
