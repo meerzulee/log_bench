@@ -130,9 +130,9 @@ class TestClearRequests < Minitest::Test
     assert_equal expected_requests, @state.cleared_requests[:requests]
     assert_equal expected_requests.size, @state.cleared_requests[:requests].size
 
-    # Should store the most recent state (from second clear)
-    assert_equal 2, @state.cleared_requests[:selected]
-    assert_equal 6, @state.cleared_requests[:scroll_offset]
+    # Should preserve the state from the FIRST clear (not the second)
+    assert_equal 1, @state.cleared_requests[:selected]
+    assert_equal 3, @state.cleared_requests[:scroll_offset]
 
     # Verify the order: original requests first, then new ones
     assert_equal original_requests.first.request_id, @state.cleared_requests[:requests].first.request_id
